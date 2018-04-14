@@ -1,0 +1,20 @@
+<resources>
+
+    <!-- Base application theme. -->
+    <style name="AppTheme" parent="Theme.AppCompat.Light.NoActionBar">
+        <!-- Customize your theme here. -->
+        <item name="colorPrimary">@color/colorPrimary</item>
+        <item name="colorPrimaryDark">@color/colorPrimaryDark</item>
+        <item name="colorAccent">@color/colorAccent</item>
+
+        <item name="margin_toolbar">16dp</item>
+    </style>
+    
+    <style name="AutoComplete" parent="Widget.AppCompat.AutoCompleteTextView">
+        <item name="android:background">@drawable/autocomplete_bg</item>
+        <item name="android:padding">10dp</item>
+    </style>
+
+    <attr name="margin_toolbar" format="dimension"/>
+
+</resources>

@@ -1,0 +1,17 @@
+/Users/syedshahnawazali/Projects/StudioProjects/DemoAssignmentBykea/app/src/main/AndroidManifest.xml:27:9-29:56 Error:
+	Element meta-data#com.google.android.geo.API_KEY at AndroidManifest.xml:27:9-29:56 duplicated with element declared at AndroidManifest.xml:23:9-25:55
+/Users/syedshahnawazali/Projects/StudioProjects/DemoAssignmentBykea/app/src/main/AndroidManifest.xml Error:
+	Validation failed, exiting
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':app:processDebugManifest'.
+> Manifest merger failed with multiple errors, see logs
+
+* Try:
+Run with --stacktrace option to get the stack trace. Run with --info or --debug option to get more log output. Run with --scan to get full insights.
+
+* Get more help at https://help.gradle.org
+
+BUILD FAILED in 1s
