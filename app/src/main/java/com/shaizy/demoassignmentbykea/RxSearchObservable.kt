@@ -14,11 +14,11 @@ import java.util.concurrent.TimeUnit
 
 class RxSearchObservable {
     companion object {
-        fun <T : TextView> fromView(textView: T) : Observable<String> {
+        fun <T : TextView> fromView(textView: T): Observable<String> {
 
             val subject = PublishSubject.create<String>()
 
-            if (textView is AutoCompleteTextView){
+            if (textView is AutoCompleteTextView) {
                 textView.setOnItemClickListener { parent, view, position, id ->
                     val item = parent.adapter?.getItem(position)?.toString()
 
@@ -38,7 +38,7 @@ class RxSearchObservable {
                 false
             }
 
-            textView.addTextChangedListener(object : TextWatcher {
+            val listener = object : TextWatcher {
                 override fun afterTextChanged(s: Editable?) {
                 }
 
@@ -48,11 +48,16 @@ class RxSearchObservable {
                 override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
                     subject.onNext(s?.toString() ?: "")
                 }
-            })
+            }
 
-            return subject.debounce(300, TimeUnit.MILLISECONDS)
-                    .filter { it.length > 3 }
+            textView.addTextChangedListener(listener)
+
+            return subject
+                    .doOnDispose { textView.removeTextChangedListener(listener) }
+                    .doOnComplete { textView.removeTextChangedListener(listener) }
+                    .filter { it.trim().length > 3 }
                     .distinctUntilChanged()
+                    .debounce(500, TimeUnit.MILLISECONDS)
         }
     }
 }

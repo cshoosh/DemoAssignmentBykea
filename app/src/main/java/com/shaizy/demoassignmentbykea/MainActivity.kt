@@ -12,11 +12,11 @@ import android.provider.Settings
 import android.support.v4.app.ActivityCompat
 import android.support.v7.app.AlertDialog
 import android.support.v7.app.AppCompatActivity
+import android.util.Log
 import android.view.View
+import android.widget.Toast
 import com.google.android.gms.common.api.GoogleApiClient
-import com.google.android.gms.common.api.PendingResult
 import com.google.android.gms.location.places.AutocompleteFilter
-import com.google.android.gms.location.places.AutocompletePredictionBuffer
 import com.google.android.gms.location.places.Places
 import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.android.gms.maps.GoogleMap
@@ -33,6 +33,7 @@ import io.reactivex.disposables.Disposable
 import io.reactivex.schedulers.Schedulers
 import kotlinx.android.synthetic.main.activity_main.*
 import java.io.BufferedReader
+import java.io.IOException
 import java.io.InputStreamReader
 import java.lang.StringBuilder
 import java.net.URL
@@ -49,9 +50,7 @@ class MainActivity : AppCompatActivity() {
 
     // Rough bounds fetched from google maps. For KARACHI
     private val mKarachiBounds = LatLngBounds.builder()
-            .include(LatLng(24.750203, 66.890898))
             .include(LatLng(25.0241748, 66.8994962))
-            .include(LatLng(25.009097, 67.329168))
             .include(LatLng(24.753090, 67.267905))
             .build()
 
@@ -67,19 +66,22 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var mGoogleClient: GoogleApiClient
 
-    private val mPickUpMarker by lazy {
+    private val mPickUpMarkerOption by lazy {
         MarkerOptions()
                 .draggable(true)
-                .visible(false)
                 .icon(BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_GREEN))
     }
 
-    private val mDropOffMarker by lazy {
+    private val mDropOffMarkerOption by lazy {
         MarkerOptions()
                 .draggable(true)
-                .visible(false)
                 .icon(BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_ROSE))
     }
+
+    private var mPickupMarker: Marker? = null
+    private var mDropoffMarker: Marker? = null
+
+    private val mGeoCoder by lazy { Geocoder(this) }
 
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -138,9 +140,61 @@ class MainActivity : AppCompatActivity() {
             // Hard Coded BYKEA LatLng for quick development
             val bykeaLatlng = LatLng(24.7784557, 67.0546954)
             mMap.animateCamera(CameraUpdateFactory.newLatLngZoom(bykeaLatlng, 20f))
-            mMap.addMarker(mPickUpMarker.position(bykeaLatlng))
-            mMap.addMarker(mDropOffMarker.position(bykeaLatlng))
 
+            mMap.setOnMarkerDragListener(object : GoogleMap.OnMarkerDragListener {
+                override fun onMarkerDragEnd(p0: Marker?) {
+                    if (p0 == null || mPickupMarker == null || mDropoffMarker == null) return
+
+                    val isPickUpMarker = p0 == mPickupMarker
+
+                    mMap.clear()
+
+                    getNavigationObservable(mPickupMarker!!.position, mDropoffMarker!!.position)
+                            .subscribe({
+
+                                if (isPickUpMarker) {
+                                    val address = it.first.routes?.firstOrNull()?.legs?.firstOrNull()?.startAddress
+                                    mPickUpMarkerOption.title(address)
+                                    mPickupSubscription?.dispose()
+
+                                    edtAutoPickUp.setText(address)
+                                    subscribePickUp()
+                                } else {
+                                    val address = it.first.routes?.firstOrNull()?.legs?.firstOrNull()?.endAddress
+                                    mDropOffMarkerOption.title(address)
+                                    mDropOffSubscription?.dispose()
+
+                                    edtAutoDestination.setText(address)
+                                    subscribeDestination(mPickupMarker!!.position)
+                                }
+
+                                mPickupMarker = mMap.addMarker(mPickUpMarkerOption.position(mPickupMarker!!.position))
+                                mDropoffMarker = mMap.addMarker(mDropOffMarkerOption.position(mDropoffMarker!!.position))
+
+                                it?.second?.let { polyData ->
+                                    addNavigation(polyData)
+                                }
+
+                                mMap.animateCamera(CameraUpdateFactory
+                                        .newLatLngBounds(LatLngBounds.builder()
+                                                .include(mPickupMarker!!.position)
+                                                .include(mDropoffMarker!!.position)
+                                                .build(), mScreen.x - 150, mScreen.y - 150, 100))
+
+
+                            }, {
+                                it.printStackTrace()
+                                Toast.makeText(this@MainActivity, R.string.something_went_wrong, Toast.LENGTH_SHORT)
+                                        .show()
+                            })
+                }
+
+                override fun onMarkerDragStart(p0: Marker?) {
+                }
+
+                override fun onMarkerDrag(p0: Marker?) {
+                }
+            })
         }
 
         edtAutoPickUp.setAdapter(SuggestionAdapter(this))
@@ -148,9 +202,6 @@ class MainActivity : AppCompatActivity() {
 
         edtAutoPickUp.setOnFocusChangeListener { v, hasFocus ->
             if (hasFocus) {
-                mPickUpMarker.visible(false)
-                mDropOffMarker.visible(false)
-
                 if (::mMap.isInitialized)
                     mMap.clear()
 
@@ -164,7 +215,7 @@ class MainActivity : AppCompatActivity() {
         edtAutoDestination.setOnFocusChangeListener { v, hasFocus ->
             if (hasFocus) {
                 edtAutoDestination.text.clear()
-                mDropOffMarker.visible(false)
+                mDropoffMarker?.isVisible = false
             }
         }
 
@@ -173,26 +224,28 @@ class MainActivity : AppCompatActivity() {
 
     private fun subscribePickUp() {
 
-        var pendingResultPickUp: PendingResult<AutocompletePredictionBuffer>? = null
-
         mPickupSubscription?.dispose()
         mPickupSubscription = RxSearchObservable.fromView(edtAutoPickUp)
-                .doOnDispose { pendingResultPickUp?.cancel() }
+                .flatMap { input ->
+                    Log.d("Places", "API Called")
+
+                    val list = Places.GeoDataApi.getAutocompletePredictions(mGoogleClient, input, mKarachiBounds, mTypeFilter)
+                            .await().toList()
+
+                    Observable.just(list)
+                }
+                .subscribeOn(Schedulers.io())
+                .observeOn(AndroidSchedulers.mainThread())
                 .subscribe({
-                    pendingResultPickUp?.cancel()
-                    pendingResultPickUp =
-                            Places.GeoDataApi.getAutocompletePredictions(mGoogleClient, it, mKarachiBounds, mTypeFilter)
+                    val adapter = edtAutoPickUp.adapter as SuggestionAdapter
 
-                    pendingResultPickUp?.setResultCallback {
-                        val adapter = edtAutoPickUp.adapter as SuggestionAdapter
+                    adapter.clear()
+                    adapter.addAll(
+                            *it.take(5)
+                                    .map { it.getFullText(null).toString() }
+                                    .toTypedArray()
+                    )
 
-                        adapter.clear()
-                        adapter.addAll(
-                                *it.take(5)
-                                        .map { it.getFullText(null).toString() }
-                                        .toTypedArray()
-                        )
-                    }
                 }, {
                     it.printStackTrace()
                 }, {
@@ -201,28 +254,17 @@ class MainActivity : AppCompatActivity() {
                     val address = edtAutoPickUp.text.toString()
                     if (Geocoder.isPresent()) {
 
-                        mGeoCoderSubscription = Observable.create<LatLng> {
-                            val geoCodedAddress = Geocoder(this)
-                                    .getFromLocationName(address, 1).firstOrNull()
-
-                            if (geoCodedAddress != null && !it.isDisposed) {
-                                it.onNext(LatLng(geoCodedAddress.latitude, geoCodedAddress.longitude))
-                            }
-
-                            if (!it.isDisposed)
-                                it.onComplete()
-                        }
+                        mGeoCoderSubscription = getGeoCoderObservable(address)
                                 .doOnSubscribe { LoaderFragment.show(supportFragmentManager) }
-                                .doOnComplete { LoaderFragment.hide(supportFragmentManager) }
                                 .doOnDispose { LoaderFragment.hide(supportFragmentManager) }
-                                .subscribeOn(Schedulers.io())
-                                .observeOn(AndroidSchedulers.mainThread())
+                                .doOnComplete { LoaderFragment.hide(supportFragmentManager) }
+                                .doOnEach { LoaderFragment.hide(supportFragmentManager) }
                                 .subscribe({
                                     subscribeDestination(it)
 
-                                    mPickUpMarker.title(address)
-                                            .visible(true)
-                                            .position(it)
+                                    mMap.clear()
+
+                                    mPickupMarker = mMap.addMarker(mPickUpMarkerOption.title(address).position(it))
 
                                     mMap.animateCamera(
                                             CameraUpdateFactory.newLatLngZoom(it, 17f)
@@ -239,26 +281,23 @@ class MainActivity : AppCompatActivity() {
         edtAutoDestination.visibility = View.VISIBLE
         edtAutoDestination.requestFocus()
 
-        var pendingResultDestination: PendingResult<AutocompletePredictionBuffer>? = null
-
         mDropOffSubscription?.dispose()
         mDropOffSubscription = RxSearchObservable.fromView(edtAutoDestination)
-                .doOnDispose { pendingResultDestination?.cancel() }
+                .flatMap { input ->
+                    Observable.just(Places.GeoDataApi.getAutocompletePredictions(mGoogleClient, input, mKarachiBounds, mTypeFilter)
+                            .await().toList())
+                }
+                .subscribeOn(Schedulers.io())
+                .observeOn(AndroidSchedulers.mainThread())
                 .subscribe({
-                    pendingResultDestination?.cancel()
-                    pendingResultDestination =
-                            Places.GeoDataApi.getAutocompletePredictions(mGoogleClient, it, mKarachiBounds, mTypeFilter)
+                    val adapter = edtAutoDestination.adapter as SuggestionAdapter
 
-                    pendingResultDestination?.setResultCallback {
-                        val adapter = edtAutoDestination.adapter as SuggestionAdapter
-
-                        adapter.clear()
-                        adapter.addAll(
-                                *it.take(5)
-                                        .map { it.getFullText(null).toString() }
-                                        .toTypedArray()
-                        )
-                    }
+                    adapter.clear()
+                    adapter.addAll(
+                            *it.take(5)
+                                    .map { it.getFullText(null).toString() }
+                                    .toTypedArray()
+                    )
                 }, {
                     it.printStackTrace()
                 }, {
@@ -266,89 +305,42 @@ class MainActivity : AppCompatActivity() {
 
                     val address = edtAutoDestination.text.toString()
                     if (Geocoder.isPresent()) {
-                        mGeoCoderSubscription = Observable.create<Pair<LatLng, String>> {
-                            val geoCodedAddress = Geocoder(this)
-                                    .getFromLocationName(address, 1).firstOrNull()
-
-                            val stringBuilder = StringBuilder()
-
-                            if (geoCodedAddress != null && !it.isDisposed) {
-                                val latLong = LatLng(geoCodedAddress.latitude, geoCodedAddress.longitude)
-
-                                val utf8 = "UTF-8"
-                                val query = String.format("origin=%s&destination=%s&key=%s",
-                                        URLEncoder.encode(latLongSource.latitude.toString() + "," + latLongSource.longitude.toString(), utf8),
-                                        URLEncoder.encode(latLong.latitude.toString() + "," + latLong.longitude.toString(), utf8),
-                                        URLEncoder.encode(getString(R.string.google_places_key), utf8))
-
-                                val connection = (URL("https://maps.googleapis.com/maps/api/directions/json?$query")
-                                        .openConnection() as HttpsURLConnection)
-                                try {
-                                    connection.connectTimeout = 5000
-                                    connection.addRequestProperty("Content-Type", "application/json")
-                                    connection.requestMethod = "GET"
-                                    connection.connect()
-
-                                    val reader = BufferedReader(InputStreamReader(connection.inputStream))
-
-
-                                    var line: String?
-
-                                    do {
-                                        line = reader.readLine()
-                                        if (line != null)
-                                            stringBuilder.append(line)
-                                    } while (line != null)
-
-
-                                } finally {
-                                    connection.disconnect()
+                        lateinit var destination: LatLng
+                        mGeoCoderSubscription = getGeoCoderObservable(address)
+                                .flatMap {
+                                    destination = it
+                                    getNavigationObservable(latLongSource, it)
                                 }
-
-                                it.onNext(Pair(latLong, stringBuilder.toString()))
-                            }
-
-                            if (!it.isDisposed)
-                                it.onComplete()
-                        }
                                 .doOnSubscribe { LoaderFragment.show(supportFragmentManager) }
-                                .doOnComplete { LoaderFragment.hide(supportFragmentManager) }
                                 .doOnDispose { LoaderFragment.hide(supportFragmentManager) }
-                                .subscribeOn(Schedulers.io())
-                                .observeOn(AndroidSchedulers.mainThread())
+                                .doOnComplete { LoaderFragment.hide(supportFragmentManager) }
+                                .doOnError { LoaderFragment.hide(supportFragmentManager) }
                                 .subscribe({
                                     mMap.clear()
 
-                                    val json =
-                                            if (it.second.isNotEmpty()) Gson().fromJson(it.second, DirectionsResponse::class.java)
-                                            else null
+                                    mPickupMarker = mMap.addMarker(mPickUpMarkerOption)
+                                    mDropoffMarker = mMap.addMarker(mDropOffMarkerOption.position(destination).title(address))
 
-                                    mDropOffMarker.visible(true)
-                                            .position(it.first)
-                                            .title(address)
-
-                                    mMap.addMarker(mPickUpMarker)
-                                    mMap.addMarker(mDropOffMarker)
-
-                                    json?.routes?.firstOrNull()?.overviewPolyline?.points?.let { polyData ->
-                                        mMap.addPolyline(
-                                                PolylineOptions()
-                                                        .addAll(
-                                                                PolyUtil.decode(polyData)
-                                                        ))
+                                    it?.second?.let { polyData ->
+                                        addNavigation(polyData)
                                     }
 
                                     mMap.animateCamera(CameraUpdateFactory
                                             .newLatLngBounds(LatLngBounds.builder()
-                                                    .include(it.first)
+                                                    .include(destination)
                                                     .include(latLongSource)
                                                     .build(), mScreen.x - 150, mScreen.y - 150, 100))
                                 }, {
                                     it.printStackTrace()
                                 })
-
                     }
                 })
+    }
+
+    private fun addNavigation(polyData: List<LatLng>) {
+        mMap.addPolyline(
+                PolylineOptions()
+                        .addAll(polyData))
     }
 
     override fun onResume() {
@@ -403,6 +395,77 @@ class MainActivity : AppCompatActivity() {
                         .show()
             }
         }
+    }
+
+    private fun getNavigationObservable(origin: LatLng, destination: LatLng): Observable<Pair<DirectionsResponse, List<LatLng>?>> {
+        return Observable.create<Pair<DirectionsResponse, List<LatLng>?>> {
+
+            val stringBuilder = StringBuilder()
+
+
+            val utf8 = "UTF-8"
+            val query = String.format("origin=%s&destination=%s&key=%s",
+                    URLEncoder.encode(origin.latitude.toString() + "," + origin.longitude.toString(), utf8),
+                    URLEncoder.encode(destination.latitude.toString() + "," + destination.longitude.toString(), utf8),
+                    URLEncoder.encode(getString(R.string.google_places_key), utf8))
+
+            val connection = (URL("https://maps.googleapis.com/maps/api/directions/json?$query")
+                    .openConnection() as HttpsURLConnection)
+            try {
+                connection.connectTimeout = 5000
+                connection.addRequestProperty("Content-Type", "application/json")
+                connection.requestMethod = "GET"
+                connection.connect()
+
+                val reader = BufferedReader(InputStreamReader(connection.inputStream))
+
+
+                var line: String?
+
+                do {
+                    line = reader.readLine()
+                    if (line != null)
+                        stringBuilder.append(line)
+                } while (line != null)
+
+
+            } finally {
+                connection.disconnect()
+            }
+
+            if (it.isDisposed) return@create
+
+            if (stringBuilder.isEmpty())
+                it.onError(IOException("Navigation Not Found"))
+            else {
+                val route = Gson().fromJson(stringBuilder.toString(), DirectionsResponse::class.java)
+                it.onNext(
+                        Pair(route,
+                                PolyUtil.decode(route.routes?.firstOrNull()?.overviewPolyline?.points)))
+            }
+
+            it.onComplete()
+        }
+                .subscribeOn(Schedulers.io())
+                .observeOn(AndroidSchedulers.mainThread())
+
+
+    }
+
+    private fun getGeoCoderObservable(address: String): Observable<LatLng> {
+        return Observable.create<LatLng> {
+
+            val geoCodedAddress = mGeoCoder.getFromLocationName(address, 1).firstOrNull()
+
+            if (geoCodedAddress != null && !it.isDisposed) {
+                it.onNext(LatLng(geoCodedAddress.latitude, geoCodedAddress.longitude))
+            }
+
+            if (!it.isDisposed)
+                it.onComplete()
+        }
+                .subscribeOn(Schedulers.io())
+                .observeOn(AndroidSchedulers.mainThread())
     }
 
     companion object {

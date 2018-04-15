@@ -4,4 +4,5 @@
     <string name="google_client_needed">Google Play services needed. Please install Google Play services and then try again.</string>
     <string name="enter_pickup_address">Enter Pickup Address</string>
     <string name="enter_drop_off_address">Enter Drop off Address</string>
+    <string name="something_went_wrong">Something went wrong!</string>
 </resources>
