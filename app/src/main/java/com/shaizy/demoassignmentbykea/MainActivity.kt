@@ -12,7 +12,6 @@ import android.provider.Settings
 import android.support.v4.app.ActivityCompat
 import android.support.v7.app.AlertDialog
 import android.support.v7.app.AppCompatActivity
-import android.util.Log
 import android.view.View
 import android.widget.Toast
 import com.google.android.gms.common.api.GoogleApiClient
@@ -42,12 +41,6 @@ import javax.net.ssl.HttpsURLConnection
 
 class MainActivity : AppCompatActivity() {
 
-    private val mScreen by lazy {
-        val point = Point()
-        window.windowManager.defaultDisplay.getSize(point)
-        point
-    }
-
     // Rough bounds fetched from google maps. For KARACHI
     private val mKarachiBounds = LatLngBounds.builder()
             .include(LatLng(25.0241748, 66.8994962))
@@ -57,6 +50,13 @@ class MainActivity : AppCompatActivity() {
     private val mTypeFilter = AutocompleteFilter.Builder()
             .setCountry("PK")
             .build()
+
+
+    private val mScreen by lazy {
+        val point = Point()
+        window.windowManager.defaultDisplay.getSize(point)
+        point
+    }
 
     private lateinit var mMap: GoogleMap
 
@@ -226,25 +226,22 @@ class MainActivity : AppCompatActivity() {
 
         mPickupSubscription?.dispose()
         mPickupSubscription = RxSearchObservable.fromView(edtAutoPickUp)
-                .flatMap { input ->
-                    Log.d("Places", "API Called")
-
-                    val list = Places.GeoDataApi.getAutocompletePredictions(mGoogleClient, input, mKarachiBounds, mTypeFilter)
-                            .await().toList()
-
-                    Observable.just(list)
-                }
-                .subscribeOn(Schedulers.io())
-                .observeOn(AndroidSchedulers.mainThread())
                 .subscribe({
-                    val adapter = edtAutoPickUp.adapter as SuggestionAdapter
 
-                    adapter.clear()
-                    adapter.addAll(
-                            *it.take(5)
-                                    .map { it.getFullText(null).toString() }
-                                    .toTypedArray()
-                    )
+                    Places.GeoDataApi.getAutocompletePredictions(mGoogleClient, it, mKarachiBounds, mTypeFilter)
+                            .setResultCallback {
+                                val adapter = edtAutoPickUp.adapter as SuggestionAdapter
+
+                                adapter.clear()
+                                adapter.addAll(
+                                        *it.take(5)
+                                                .map { it.getFullText(null).toString() }
+                                                .toTypedArray()
+                                )
+
+                                adapter.notifyDataSetChanged()
+                            }
+
 
                 }, {
                     it.printStackTrace()
@@ -283,21 +280,21 @@ class MainActivity : AppCompatActivity() {
 
         mDropOffSubscription?.dispose()
         mDropOffSubscription = RxSearchObservable.fromView(edtAutoDestination)
-                .flatMap { input ->
-                    Observable.just(Places.GeoDataApi.getAutocompletePredictions(mGoogleClient, input, mKarachiBounds, mTypeFilter)
-                            .await().toList())
-                }
-                .subscribeOn(Schedulers.io())
-                .observeOn(AndroidSchedulers.mainThread())
                 .subscribe({
-                    val adapter = edtAutoDestination.adapter as SuggestionAdapter
+                    Places.GeoDataApi.getAutocompletePredictions(mGoogleClient, it, mKarachiBounds, mTypeFilter)
+                            .setResultCallback {
+                                val adapter = edtAutoDestination.adapter as SuggestionAdapter
 
-                    adapter.clear()
-                    adapter.addAll(
-                            *it.take(5)
-                                    .map { it.getFullText(null).toString() }
-                                    .toTypedArray()
-                    )
+                                adapter.clear()
+                                adapter.addAll(
+                                        *it.take(5)
+                                                .map { it.getFullText(null).toString() }
+                                                .toTypedArray()
+                                )
+
+                                adapter.notifyDataSetChanged()
+                            }
+
                 }, {
                     it.printStackTrace()
                 }, {
