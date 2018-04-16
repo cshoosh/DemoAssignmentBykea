@@ -258,7 +258,7 @@ class MainActivity : AppCompatActivity() {
                                 .doOnSubscribe { LoaderFragment.show(supportFragmentManager) }
                                 .doOnDispose { LoaderFragment.hide(supportFragmentManager) }
                                 .doOnComplete { LoaderFragment.hide(supportFragmentManager) }
-                                .doOnEach { LoaderFragment.hide(supportFragmentManager) }
+                                .doOnError { LoaderFragment.hide(supportFragmentManager) }
                                 .subscribe({
                                     subscribeDestination(it)
 
